@@ -1,0 +1,12 @@
+platform:
+  docker:
+    image-name: "algo-runner:1.0"
+    timeout-minutes: 10
+    socket-path: "unix:///var/run/docker.sock"
+  paths:
+    algorithms: "./algorithms"
+    datasets: "./datasets"
+    tasks: "./tasks"
+
+server:
+  port: 8080

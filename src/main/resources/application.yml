@@ -10,3 +10,18 @@ platform:
 
 server:
   port: 8080
+
+# SpringDoc OpenAPI 配置
+springdoc:
+  api-docs:
+    enabled: true
+    path: /api-docs
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui.html
+    display-request-duration: true
+    operations-sorter: method
+    tags-sorter: alpha
+    disable-swagger-default-url: true
+  packages-to-scan: com.iiesoftware.platform.controller
+  paths-to-match: /api/**

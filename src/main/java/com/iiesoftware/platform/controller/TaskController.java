@@ -41,19 +41,19 @@ public class TaskController {
             @ApiResponse(responseCode = "500", description = "服务器内部错误")
     })
     public ResponseEntity<Task> runTask(
-            @Parameter(description = "算法名称", required = true, example = "algorithmA")
-            @RequestParam String algorithm,
+            @Parameter(description = "算法ID", required = true)
+            @RequestParam Long algorithmId,
+
+            @Parameter(description = "镜像ID", required = true)
+            @RequestParam Long imageId,
 
             @Parameter(description = "数据集名称", required = true, example = "dataA")
-            @RequestParam String dataset,
+            @RequestParam String dataset) {
 
-            @Parameter(description = "算法入口文件", required = false, example = "main.py")
-            @RequestParam(defaultValue = "main.py") String entryPoint) {
-
-        Task task = taskManager.createTask(algorithm, dataset);
+        Task task = taskManager.createTask(algorithmId, imageId, dataset);
 
         // 异步执行
-        dockerRunner.runTask(task.getTaskId(), algorithm, dataset, entryPoint)
+        dockerRunner.runTask(task)
                 .thenAccept(exitCode -> {
                     // 异步完成后的处理
                 });

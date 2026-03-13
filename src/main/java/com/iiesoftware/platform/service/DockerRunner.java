@@ -7,6 +7,7 @@ import com.github.dockerjava.api.model.Frame;
 import com.github.dockerjava.api.model.Volume;
 import com.github.dockerjava.core.command.LogContainerResultCallback;
 import com.iiesoftware.platform.config.PlatformProperties;
+import com.iiesoftware.platform.model.Task;
 import com.iiesoftware.platform.model.TaskStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,15 +42,16 @@ public class DockerRunner {
     }
 
     @Async
-    public CompletableFuture<Integer> runTask(String taskId, String algorithm, String dataset, String entryPoint) {
+    public CompletableFuture<Integer> runTask(Task task) {
+        String taskId = task.getTaskId();
         CompletableFuture<Integer> future = new CompletableFuture<>();
 
         try {
             taskManager.updateTaskStatus(taskId, TaskStatus.RUNNING);
 
-            // 转换为绝对路径
-            String algoPath = getAbsolutePath(properties.getPaths().getAlgorithms(), algorithm);
-            String inputPath = getAbsolutePath(properties.getPaths().getDatasets(), dataset);
+            // 获取路径
+            String algoPath = Paths.get(task.getAlgorithm().getScriptPath()).toAbsolutePath().toString();
+            String inputPath = getAbsolutePath(properties.getPaths().getDatasets(), task.getDataset());
             String outputPath = getAbsolutePath(properties.getPaths().getTasks(), taskId + "/result");
 
             log.info("Task {} - Algorithm path: {}", taskId, algoPath);
@@ -57,7 +59,14 @@ public class DockerRunner {
             log.info("Task {} - Output path: {}", taskId, outputPath);
 
             // 验证路径是否存在
-            validatePaths(algoPath, inputPath);
+            File algoFile = new File(algoPath);
+            if (!algoFile.exists()) {
+                 throw new IllegalArgumentException("Algorithm file does not exist: " + algoPath);
+            }
+            File inputFile = new File(inputPath);
+             if (!inputFile.exists()) {
+                 throw new IllegalArgumentException("Input path does not exist: " + inputPath);
+            }
 
             // 确保输出目录存在
             File outputDir = new File(outputPath);
@@ -66,21 +75,26 @@ public class DockerRunner {
                 log.info("Created output directory: {}", outputPath);
             }
 
-            // 检查Docker镜像是否存在
-            checkDockerImage();
+            String imageName = task.getImage().getTag();
 
-            Volume algoVol = new Volume("/workspace");
+            // 检查Docker镜像是否存在
+            checkDockerImage(imageName);
+
+            Volume algoVol = new Volume("/workspace/algorithm.py");
             Volume inputVol = new Volume("/data/input");
             Volume outputVol = new Volume("/data/output");
 
-            log.info("Creating container for task {}...", taskId);
-            CreateContainerResponse container = docker.createContainerCmd(properties.getDocker().getImageName())
+            log.info("Creating container for task {} with image {}...", taskId, imageName);
+
+            // 确保目录权限 (macOS 上通常不需要，但在某些 Docker 环境可能需要)
+            // 修改绑定挂载逻辑
+            CreateContainerResponse container = docker.createContainerCmd(imageName)
                     .withBinds(
-                            new Bind(algoPath, algoVol),
-                            new Bind(inputPath, inputVol),
-                            new Bind(outputPath, outputVol)
+                            new Bind(algoPath, new Volume("/workspace/algorithm.py")),
+                            new Bind(inputPath, new Volume("/data/input")),
+                            new Bind(outputPath, new Volume("/data/output"))
                     )
-                    .withCmd(entryPoint)
+                    .withCmd("/workspace/algorithm.py")
                     .exec();
 
             String containerId = container.getId();
@@ -152,15 +166,19 @@ public class DockerRunner {
         }
     }
 
-    private void checkDockerImage() {
+    private void checkDockerImage(String imageName) {
         try {
-            docker.inspectImageCmd(properties.getDocker().getImageName()).exec();
-            log.info("Docker image {} found", properties.getDocker().getImageName());
+            docker.inspectImageCmd(imageName).exec();
+            log.info("Docker image {} found", imageName);
         } catch (Exception e) {
-            log.error("Docker image {} not found", properties.getDocker().getImageName());
-            throw new RuntimeException("Docker image not found: " + properties.getDocker().getImageName() +
-                    ". Please build it with: docker build -t " + properties.getDocker().getImageName() +
-                    " -f docker/algo-runner/Dockerfile .", e);
+            log.warn("Docker image {} not found locally, attempting to pull...", imageName);
+            try {
+                docker.pullImageCmd(imageName).start().awaitCompletion();
+                log.info("Docker image {} pulled successfully", imageName);
+            } catch (Exception pullEx) {
+                log.error("Failed to pull docker image {}", imageName, pullEx);
+                throw new RuntimeException("Docker image not found and failed to pull: " + imageName, e);
+            }
         }
     }
 

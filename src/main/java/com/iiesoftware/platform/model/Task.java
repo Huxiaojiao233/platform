@@ -1,23 +1,40 @@
 package com.iiesoftware.platform.model;
 
+import javax.persistence.*;
 import java.time.LocalDateTime;
 
+@Entity
+@Table(name = "tasks")
 public class Task {
+    @Id
     private String taskId;
-    private String algorithm;
+
+    @ManyToOne
+    @JoinColumn(name = "algorithm_id")
+    private Algorithm algorithm;
+
+    @ManyToOne
+    @JoinColumn(name = "image_id")
+    private Image image;
+
     private String dataset;
+
+    @Enumerated(EnumType.STRING)
     private TaskStatus status;
+
     private LocalDateTime createdAt;
     private LocalDateTime completedAt;
     private Integer exitCode;
+
+    @Column(columnDefinition = "TEXT")
     private String logs;
 
-    // 构造函数、getter/setter
     public Task() {}
 
-    public Task(String taskId, String algorithm, String dataset) {
+    public Task(String taskId, Algorithm algorithm, Image image, String dataset) {
         this.taskId = taskId;
         this.algorithm = algorithm;
+        this.image = image;
         this.dataset = dataset;
         this.status = TaskStatus.PENDING;
         this.createdAt = LocalDateTime.now();
@@ -31,12 +48,20 @@ public class Task {
         this.taskId = taskId;
     }
 
-    public String getAlgorithm() {
+    public Algorithm getAlgorithm() {
         return algorithm;
     }
 
-    public void setAlgorithm(String algorithm) {
+    public void setAlgorithm(Algorithm algorithm) {
         this.algorithm = algorithm;
+    }
+
+    public Image getImage() {
+        return image;
+    }
+
+    public void setImage(Image image) {
+        this.image = image;
     }
 
     public String getDataset() {

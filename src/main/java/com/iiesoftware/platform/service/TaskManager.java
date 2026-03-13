@@ -1,10 +1,16 @@
 package com.iiesoftware.platform.service;
 
 import com.iiesoftware.platform.config.PlatformProperties;
+import com.iiesoftware.platform.model.Algorithm;
+import com.iiesoftware.platform.model.Image;
 import com.iiesoftware.platform.model.Task;
 import com.iiesoftware.platform.model.TaskStatus;
+import com.iiesoftware.platform.repository.AlgorithmRepository;
+import com.iiesoftware.platform.repository.ImageRepository;
+import com.iiesoftware.platform.repository.TaskRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.io.File;
 import java.io.IOException;
@@ -13,24 +19,37 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.Optional;
 
 @Service
 public class TaskManager {
 
     private final PlatformProperties properties;
-    private final ConcurrentHashMap<String, Task> taskCache = new ConcurrentHashMap<>();
+    private final TaskRepository taskRepository;
+    private final AlgorithmRepository algorithmRepository;
+    private final ImageRepository imageRepository;
 
     @Autowired
-    public TaskManager(PlatformProperties properties) {
+    public TaskManager(PlatformProperties properties, 
+                       TaskRepository taskRepository,
+                       AlgorithmRepository algorithmRepository,
+                       ImageRepository imageRepository) {
         this.properties = properties;
+        this.taskRepository = taskRepository;
+        this.algorithmRepository = algorithmRepository;
+        this.imageRepository = imageRepository;
     }
 
-    public Task createTask(String algorithm, String dataset) {
+    @Transactional
+    public Task createTask(Long algorithmId, Long imageId, String dataset) {
+        Algorithm algorithm = algorithmRepository.findById(algorithmId)
+            .orElseThrow(() -> new RuntimeException("Algorithm not found"));
+        Image image = imageRepository.findById(imageId)
+            .orElseThrow(() -> new RuntimeException("Image not found"));
+
         String taskId = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"));
-        Task task = new Task(taskId, algorithm, dataset);
+        Task task = new Task(taskId, algorithm, image, dataset);
 
         // 使用绝对路径创建任务目录
         Path taskPath = Paths.get(properties.getPaths().getTasks()).toAbsolutePath().resolve(taskId);
@@ -39,9 +58,8 @@ public class TaskManager {
         try {
             Files.createDirectories(resultPath);
             logDirectoryInfo(taskPath);
-            writeStatus(taskId, TaskStatus.PENDING);
-            taskCache.put(taskId, task);
-            task.setStatus(TaskStatus.PENDING);
+            // 不再需要手动写 status.txt，状态存数据库
+            taskRepository.save(task);
         } catch (IOException e) {
             throw new RuntimeException("Failed to create task directory: " + taskPath, e);
         }
@@ -51,101 +69,47 @@ public class TaskManager {
 
     private void logDirectoryInfo(Path path) {
         System.out.println("Created task directory: " + path.toAbsolutePath().normalize());
-        System.out.println("Directory exists: " + Files.exists(path));
-        System.out.println("Directory writable: " + Files.isWritable(path));
     }
 
+    @Transactional
     public void updateTaskStatus(String taskId, TaskStatus status) {
-        Task task = taskCache.get(taskId);
-        if (task != null) {
+        Optional<Task> taskOpt = taskRepository.findById(taskId);
+        if (taskOpt.isPresent()) {
+            Task task = taskOpt.get();
             task.setStatus(status);
             if (status == TaskStatus.SUCCESS || status == TaskStatus.FAILED || status == TaskStatus.TIMEOUT) {
                 task.setCompletedAt(LocalDateTime.now());
             }
-        }
-
-        try {
-            writeStatus(taskId, status);
-        } catch (IOException e) {
-            throw new RuntimeException("Failed to update task status", e);
+            taskRepository.save(task);
         }
     }
 
+    @Transactional
     public void updateTaskExitCode(String taskId, int exitCode) {
-        Task task = taskCache.get(taskId);
-        if (task != null) {
+        Optional<Task> taskOpt = taskRepository.findById(taskId);
+        if (taskOpt.isPresent()) {
+            Task task = taskOpt.get();
             task.setExitCode(exitCode);
+            taskRepository.save(task);
         }
     }
 
+    @Transactional
     public void saveTaskLogs(String taskId, String logs) {
-        Task task = taskCache.get(taskId);
-        if (task != null) {
+        Optional<Task> taskOpt = taskRepository.findById(taskId);
+        if (taskOpt.isPresent()) {
+            Task task = taskOpt.get();
             task.setLogs(logs);
+            taskRepository.save(task);
         }
-
-        try {
-            writeLog(taskId, logs);
-        } catch (IOException e) {
-            throw new RuntimeException("Failed to save task logs", e);
-        }
-    }
-
-    private void writeStatus(String taskId, TaskStatus status) throws IOException {
-        Path taskDir = Paths.get(properties.getPaths().getTasks()).toAbsolutePath().resolve(taskId);
-        Path statusFile = taskDir.resolve("status.txt");
-        Files.write(statusFile, status.name().getBytes());
-    }
-
-    private void writeLog(String taskId, String log) throws IOException {
-        Path taskDir = Paths.get(properties.getPaths().getTasks()).toAbsolutePath().resolve(taskId);
-        Path logFile = taskDir.resolve("logs.txt");
-        Files.write(logFile, log.getBytes());
     }
 
     public List<Task> listAllTasks() {
-        Path tasksDir = Paths.get(properties.getPaths().getTasks()).toAbsolutePath();
-        File[] taskDirs = tasksDir.toFile().listFiles(File::isDirectory);
-
-        List<Task> tasks = new ArrayList<>();
-        if (taskDirs != null) {
-            for (File taskDir : taskDirs) {
-                String taskId = taskDir.getName();
-                Task task = taskCache.getOrDefault(taskId, loadTaskFromDisk(taskId));
-                if (task != null) {
-                    tasks.add(task);
-                }
-            }
-        }
-        return tasks;
+        return taskRepository.findAll();
     }
 
     public Task getTask(String taskId) {
-        return taskCache.getOrDefault(taskId, loadTaskFromDisk(taskId));
-    }
-
-    private Task loadTaskFromDisk(String taskId) {
-        // 从磁盘加载任务信息
-        try {
-            Path taskDir = Paths.get(properties.getPaths().getTasks()).toAbsolutePath().resolve(taskId);
-            Path statusFile = taskDir.resolve("status.txt");
-            if (Files.exists(statusFile)) {
-                String status = new String(Files.readAllBytes(statusFile));
-                Task task = new Task(taskId, "unknown", "unknown");
-                task.setStatus(TaskStatus.valueOf(status));
-
-                // 尝试读取日志
-                Path logFile = taskDir.resolve("logs.txt");
-                if (Files.exists(logFile)) {
-                    task.setLogs(new String(Files.readAllBytes(logFile)));
-                }
-
-                return task;
-            }
-        } catch (Exception e) {
-            // 忽略加载错误
-        }
-        return null;
+        return taskRepository.findById(taskId).orElse(null);
     }
 
     public String getTaskResultPath(String taskId) {
